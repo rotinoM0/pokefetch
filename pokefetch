@@ -1,0 +1,113 @@
+#!/usr/bin/env bash
+# pokefetch - sprite do pokeget ao lado das informacoes do fastfetch
+set -uo pipefail
+
+VERSION="1.0.0"
+
+usage() {
+    cat <<'EOF'
+pokefetch - sprite do pokeget ao lado das informacoes do fastfetch
+
+uso:
+  pokefetch [pokemon|random] [opcoes] [flags do fastfetch] [-- flags do fastfetch]
+
+opcoes do pokefetch:
+  -p, --pokemon NOME   pokemon a exibir (padrao: random)
+  -s, --shiny          versao shiny
+  -m, --mega           versao mega (tambem: --mega-x, --mega-y)
+  -a, --alolan         forma alolan          -g, --gmax    forma gigantamax
+      --hisui          forma hisui           -n, --noble   forma noble (com --hisui)
+      --galar          forma galarian         --female      forma femea
+  -f, --form FORMA     forma especifica (repassada ao pokeget)
+      --no-logo        nao mostra o sprite
+      --no-color       sem cores (bom para redirecionar para arquivo)
+  -h, --help           esta ajuda
+  -V, --version        versoes de pokefetch, fastfetch e pokeget
+
+flags do fastfetch vao direto, ex.: --logo-position top, --structure kernel:shell
+obs: -s aqui significa shiny; para o -s do fastfetch use: pokefetch -- -s kernel:shell
+     depois de uma flag do fastfetch, os argumentos seguintes vao para ele; passe o
+     pokemon antes (ou use -p NOME).
+
+exemplos:
+  pokefetch                       # pokemon aleatorio
+  pokefetch pikachu               # pelo nome
+  pokefetch -p gengar -s          # shiny
+  pokefetch -p charizard -f mega  # forma especifica
+  pokefetch --no-logo --no-color  # so a caixa, sem cor
+EOF
+}
+
+mon=""
+pget=()
+ff=()
+saw_mon=0
+ff_mode=0
+no_logo=0
+no_color=0
+
+while (($#)); do
+    case $1 in
+        -h|--help)
+            usage; exit 0 ;;
+        -V|--version)
+            printf 'pokefetch %s\n%s\n%s\n' "$VERSION" \
+                "$(fastfetch --version 2>/dev/null | head -1)" \
+                "$(pokeget --version 2>/dev/null)"
+            exit 0 ;;
+        -p|--pokemon)
+            [[ ${2-} ]] || { echo "pokefetch: $1 precisa de um nome" >&2; exit 2; }
+            mon=$2; saw_mon=1; shift 2 ;;
+        --pokemon=*)
+            mon=${1#*=}; saw_mon=1; shift ;;
+        --no-logo)
+            no_logo=1; shift ;;
+        --no-color)
+            no_color=1; shift ;;
+        -s|--shiny|-m|--mega|--mega-x|--mega-y|-a|--alolan|-g|--gmax|--hisui|-n|--noble|--galar|--female)
+            pget+=("$1"); shift ;;
+        -f|--form)
+            [[ ${2-} ]] || { echo "pokefetch: $1 precisa de uma forma" >&2; exit 2; }
+            pget+=("$1" "$2"); shift 2 ;;
+        --)
+            shift; ff+=("$@"); break ;;
+        -*)
+            ff+=("$1"); ff_mode=1; shift ;;
+        *)
+            if ((saw_mon || ff_mode)); then ff+=("$1"); else mon=$1; saw_mon=1; fi
+            shift ;;
+    esac
+done
+
+[[ $mon ]] || mon=random
+
+errf=$(mktemp -t pokefetch.XXXXXX) || errf=/dev/null
+out=$(pokeget "$mon" --hide-name "${pget[@]}" 2>"$errf"); rc=$?
+
+if ((rc != 0)) || [[ -z $out ]]; then
+    echo "pokefetch: falha ao obter o sprite de '$mon'" >&2
+    [[ -s $errf ]] && sed 's/^/  pokeget: /' "$errf" >&2
+    rm -f "$errf"
+    exit 1
+fi
+rm -f "$errf"
+
+strip_ansi() { sed $'s/\x1b\\[[0-9;]*[a-zA-Z]//g'; }
+
+if ((no_color)); then
+    plain=$(printf '%s\n' "$out" | strip_ansi)
+    if ((no_logo)); then
+        fastfetch --logo none "${ff[@]}" 2>&1 | strip_ansi
+    else
+        fastfetch --file-raw <(printf '%s\n' "$plain") \
+                  --logo-padding-right 2 "${ff[@]}" 2>&1 | strip_ansi
+    fi
+    exit "${PIPESTATUS[0]}"
+fi
+
+if ((no_logo)); then
+    exec fastfetch --logo none "${ff[@]}"
+fi
+
+exec fastfetch --file-raw <(printf '%s\n' "$out") \
+               --logo-padding-right 2 "${ff[@]}"
